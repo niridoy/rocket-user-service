@@ -1,0 +1,19 @@
+{
+    "name": "node-web-app",
+    "version": "1.0.0",
+    "description": "Node.js web application",
+    "main": "src/server.js",
+    "scripts": {
+        "start": "node src/server.js",
+        "dev": "nodemon src/server.js",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "dependencies": {
+        "bcrypt": "^6.0.0",
+        "body-parser": "^2.2.0",
+        "dotenv": "^16.3.1",
+        "express": "^4.21.2",
+        "jsonwebtoken": "^9.0.2",
+        "mysql2": "^3.15.1"
+    }
+}
