@@ -4,7 +4,7 @@ pipeline {
     parameters {
 
         choice(
-            name: 'ENV',
+            name: 'ENVIRONMENT',
             choices: ['dev', 'stg', 'prd'],
             description: 'Select environment'
         )
@@ -23,25 +23,28 @@ pipeline {
 
     stages {
 
-        stage('Clean Workspace') {
+        stage('🧹 Clean Workspace') {
             steps {
                 deleteDir()
             }
         }
 
-        stage('Validate Input') {
+        stage('🧠 Validate Input & Prepare Context') {
             steps {
                 script {
 
-                    if (params.ENV == "prd") {
+                    env.ENVIRONMENT = params.ENVIRONMENT
+                    env.SOURCE_REF = params.SOURCE_REF
+
+                    if (params.ENVIRONMENT == "prd") {
 
                         if (!params.SOURCE_REF.startsWith("v")) {
                             error("❌ PROD only allows tags starting with v (e.g. v1.0.0)")
                         }
 
                         env.SOURCE_TYPE = "tag"
-                        env.IMAGE_TAG = "${params.SOURCE_REF}"
-                        env.GIT_REF = "${params.SOURCE_REF}"
+                        env.IMAGE_TAG = params.SOURCE_REF
+                        env.GIT_REF = params.SOURCE_REF
 
                         echo "🔴 PROD → TAG: ${SOURCE_REF}"
 
@@ -51,10 +54,10 @@ pipeline {
 
                         def safeRef = params.SOURCE_REF.replaceAll("/", "-")
 
-                        env.IMAGE_TAG = "${params.ENV}-${safeRef}-${BUILD_NUMBER}"
-                        env.GIT_REF = "${params.SOURCE_REF}"
+                        env.IMAGE_TAG = "${params.ENVIRONMENT}-${safeRef}-${BUILD_NUMBER}"
+                        env.GIT_REF = params.SOURCE_REF
 
-                        echo "🟢 ${ENV} → ${SOURCE_TYPE}: ${SOURCE_REF}"
+                        echo "🟢 ${params.ENVIRONMENT} → ${SOURCE_TYPE}: ${SOURCE_REF}"
                     }
 
                     env.IMAGE = "${REGISTRY}:${IMAGE_TAG}"
@@ -62,31 +65,43 @@ pipeline {
             }
         }
 
-        stage('Checkout Code') {
+        stage('📥 Checkout Code (SAFE REMOTE RESOLVE)') {
             steps {
                 sh '''
-                    echo "📥 Cloning repo..."
+                    echo "📥 Fetching repository..."
 
                     git init
                     git remote add origin $GIT_REPO
                     git fetch --all --tags
 
-                    echo "🔀 Checking out $SOURCE_REF"
-                    git checkout $SOURCE_REF
+                    echo "🔍 Checking ref: $SOURCE_REF"
+
+                    if git ls-remote --exit-code --heads origin $SOURCE_REF > /dev/null 2>&1; then
+                        echo "✔ Branch found → checking out"
+                        git checkout -b $SOURCE_REF origin/$SOURCE_REF
+
+                    elif git ls-remote --exit-code --tags origin $SOURCE_REF > /dev/null 2>&1; then
+                        echo "✔ Tag found → checking out"
+                        git checkout tags/$SOURCE_REF
+
+                    else
+                        echo "❌ ERROR: Ref not found → $SOURCE_REF"
+                        exit 1
+                    fi
                 '''
             }
         }
 
-        stage('Build Docker Image') {
+        stage('🏗️ Build Docker Image') {
             steps {
                 sh '''
-                    echo "🏗️ Building image..."
+                    echo "🏗️ Building image: $IMAGE"
                     docker build -t $IMAGE .
                 '''
             }
         }
 
-        stage('Login & Push Image') {
+        stage('🔐 Login & Push Image') {
             steps {
                 withCredentials([usernamePassword(
                     credentialsId: 'docker-creds',
@@ -102,7 +117,7 @@ pipeline {
             }
         }
 
-        stage('GitOps Update & Create PR') {
+        stage('🚀 GitOps Update & Create PR') {
             steps {
                 withCredentials([usernamePassword(
                     credentialsId: 'docker-creds',
@@ -111,19 +126,16 @@ pipeline {
                 )]) {
 
                     sh '''
-                        echo "📥 Cloning GitOps repo..."
-
                         rm -rf k8s-gitops
                         git clone https://$USER:$TOKEN@github.com/niridoy/k8s-gitops.git
                         cd k8s-gitops
 
-                        BRANCH="${ENV}/user-service-${IMAGE_TAG}"
+                        BRANCH="${ENVIRONMENT}/user-service-${IMAGE_TAG}"
                         git checkout -b $BRANCH
 
-                        FILE="user-service/overlays/${ENV}/patch.yaml"
+                        FILE="user-service/overlays/${ENVIRONMENT}/patch.yaml"
 
                         echo "🔧 Updating image..."
-
                         sed -i "s|image: ghcr.io/niridoy/rocket-user-service:.*|image: ${IMAGE}|g" $FILE
 
                         git config user.name "jenkins"
@@ -136,19 +148,17 @@ pipeline {
                             exit 0
                         fi
 
-                        git commit -m "[${ENV}] User-Service Deploy ${IMAGE_TAG}"
+                        git commit -m "[${ENVIRONMENT}] user-service deploy ${IMAGE_TAG}"
                         git push origin $BRANCH
 
-                        echo "📮 Creating PR..."
-
-                        PR_TITLE="[${ENV}][User-Service][${SOURCE_TYPE}] Image Update ${IMAGE_TAG}"
+                        PR_TITLE="[${ENVIRONMENT}][User-Service][${SOURCE_TYPE}] Image Update ${IMAGE_TAG}"
 
                         PR_BODY=$(cat <<EOF
 {
   "title": "${PR_TITLE}",
   "head": "$BRANCH",
   "base": "main",
-  "body": "## 🚀 Deployment Summary\\n\\n- Environment: ${ENV}\\n- Source: ${SOURCE_REF}\\n- Type: ${SOURCE_TYPE}\\n- Image: ${IMAGE}\\n\\n## 🔁 Flow\\n- DEV/STG: branch or tag allowed\\n- PROD: only tag (v*)\\n\\nAuto-generated by Jenkins CI/CD"
+  "body": "## 🚀 Deployment Summary\\n\\n- Environment: ${ENVIRONMENT}\\n- Source: ${SOURCE_REF}\\n- Type: ${SOURCE_TYPE}\\n- Image: ${IMAGE}\\n\\nAuto-generated by Jenkins CI/CD"
 }
 EOF
 )
@@ -170,14 +180,18 @@ EOF
         success {
             echo "=================================="
             echo "✅ SUCCESS"
-            echo "ENV: ${ENV}"
+            echo "ENV: ${ENVIRONMENT}"
             echo "SOURCE: ${SOURCE_REF}"
             echo "IMAGE: ${IMAGE}"
             echo "=================================="
         }
 
         failure {
-            echo "❌ FAILED"
+            echo "=================================="
+            echo "❌ FAILED PIPELINE"
+            echo "ENV: ${params.ENVIRONMENT}"
+            echo "SOURCE: ${params.SOURCE_REF}"
+            echo "=================================="
         }
     }
 }
