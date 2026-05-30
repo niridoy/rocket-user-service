@@ -15,5 +15,45 @@ services:
       - JAVA_OPTS=-Djenkins.install.runSetupWizard=true
     restart: unless-stopped
 
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-appdb}
+      MYSQL_USER: ${DB_USER:-user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-password}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: phpmyadmin
+    environment:
+      PMA_HOST: mysql
+      PMA_USER: ${DB_USER:-user}
+      PMA_PASSWORD: ${DB_PASSWORD:-password}
+    ports:
+      - "8081:80"
+    depends_on:
+      - mysql
+    restart: unless-stopped
+
+  user-service:
+    build: .
+    image: user-service:1.0.0
+    container_name: user-service
+    env_file:
+      - ./.env
+    ports:
+      - "8181:8181"
+    depends_on:
+      - mysql
+    restart: unless-stopped
+
 volumes:
   jenkins_home:
+  mysql_data:
